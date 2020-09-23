@@ -3,7 +3,7 @@
 import * as yargs from 'yargs';
 import path from 'path'
 import { start } from '..';
-const yarg = yargs.usage('Transform vue files to class ts vue files.\nUsage: vue2ts [options] <root directory>')
+const yarg = yargs.usage('Transform vue files to class ts vue files.\nUsage: vue2ts [options] <root directory> <out directory>')
   .example('vue2ts src', 'The default output directory  is root directory name +"Ts"')
   .example('vue2ts src  dist', 'Output directory  is dist')
   .detectLocale(false)
