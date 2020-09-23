@@ -1,7 +1,8 @@
 {
   "name": "vue-transform-ts",
   "version": "0.0.1",
-  "description": "",
+  "description": "Transform vue files to class ts vue files",
+  "keywords": ["vue","class","ts","decorator","transform"],
   "main": "dist/index.js",
   "files": ["dist"],
   "bin": {
@@ -12,15 +13,20 @@
     "watch": "tsc -w",
     "run": "node dist --inspect"
   },
-  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cereschen/vue-transform-ts.git"
+  },
+  "homepage": "https://github.com/cereschen/vue-transform-ts",
+  "author": "cereschen",
   "license": "MIT",
   "dependencies": {
-    "@types/fs-extra": "^9.0.1",
     "ts-morph": "^8.1.0",
     "typescript": "^4.0.2",
     "yargs": "^16.0.3"
   },
   "devDependencies": {
+    "@types/fs-extra": "^9.0.1",
     "@types/yargs": "^15.0.5",
     "fs-extra": "^9.0.1"
   }
