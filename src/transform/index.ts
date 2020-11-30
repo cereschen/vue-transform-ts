@@ -1,6 +1,6 @@
 
-import { Docs, getDocs } from '../utils'
-import { ts, Node, SourceFile, ObjectLiteralElementLike } from 'ts-morph'
+import { Docs, getDocs, capitalize, removeQuote, getCorrectFunction } from '../utils'
+import { ts, Node, SourceFile, ObjectLiteralElementLike, ObjectLiteralExpression } from 'ts-morph'
 const { SyntaxKind } = ts
 import fs from 'fs'
 import path from 'path'
@@ -16,8 +16,13 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
   let ignoredDataMembers: ObjectLiteralElementLike[] = []
   let defaultExport = sf.getDefaultExportSymbol()?.getDeclarations()[0]
   if (!defaultExport) return
-  let obj = defaultExport.getFirstChildByKind(SyntaxKind.ObjectLiteralExpression)
+  let obj: ObjectLiteralExpression | undefined
+  obj = defaultExport.getFirstChildByKind(SyntaxKind.ObjectLiteralExpression)
+  if (!obj) {
+    obj = defaultExport.getFirstChildByKind(SyntaxKind.CallExpression)?.getFirstChildByKind(SyntaxKind.ObjectLiteralExpression)
+  }
   if (!obj) return;
+
 
   let data = obj.getProperty('data')
   let othersDataStatement: string[] = []
@@ -36,19 +41,23 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
 
     dataObj?.getProperties().map(item => {
       if (Node.isPropertyAssignment(item) || Node.isShorthandPropertyAssignment(item)) {
-        let name = item.getSymbol()?.getName()
-        let initializer
-        let docs: Docs | undefined
+        let name = removeQuote(item.getSymbol()?.getName()!)
+        let initializerText
+        let docs: Docs
         let type = item.getType().getText()
         let inConstructor = false
-        if (type.match(/undefined/)) type = 'any'
-        if (Node.isIdentifier(item.getInitializer())) {
-          inConstructor = true
+        if (type.match(/(undefined|never)/)) type = 'any'
+        const initializer = item.getInitializer()
+        initializerText = initializer?.getText()
+        if (!initializer || Node.isIdentifier(initializer)) {
+          if (!initializer) {
+            initializerText = name
+          }
+          // inConstructor = true
         }
         docs = getDocs(item)
-        initializer = item.getInitializer()?.getText()
-        if (name && initializer && docs && type) {
-          dataMembers.push({ name, initializer, docs, type, inConstructor })
+        if (name && initializerText && type) {
+          dataMembers.push({ name, initializer: initializerText, docs, type, inConstructor })
         }
       } else {
         ignoredDataMembers.push(item)
@@ -66,8 +75,11 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
   let ignoredMethodsMembers: ObjectLiteralElementLike[] = []
   methodsObj?.getProperties().map(item => {
 
-    if (Node.isMethodDeclaration(item)) {
+    if (Node.isMethodDeclaration(item) || Node.isPropertyAssignment(item)) {
       let text = item.getText()
+      if (Node.isPropertyAssignment(item)) {
+        text = item.getNodeProperty("initializer").getText().replace(/^function/, removeQuote(item.getName()))
+      }
       let docs: Docs
       docs = getDocs(item)
       methodsMembers.push({ text, docs })
@@ -85,12 +97,44 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
 
   let computedMembers: ComputedMember[] = []
   let ignoredComputedMembers: ObjectLiteralElementLike[] = []
+  let computedObjMembers: ComputedMember[] = []
+
   computedObj?.getProperties().map(item => {
 
-    if (Node.isMethodDeclaration(item)) {
+    if (Node.isMethodDeclaration(item) || Node.isPropertyAssignment(item)) {
       let text = item.getText()
       let docs: Docs
       docs = getDocs(item)
+      if (Node.isPropertyAssignment(item)) {
+        let initializer = item.getInitializer()
+        if (Node.isObjectLiteralExpression(initializer)) {
+          let get = initializer.getProperty('get')
+          let getText = ''
+          let set = initializer.getProperty('set')
+          let setText = ''
+
+          if (Node.isMethodDeclaration(get)) {
+            getText = `get ` + get.getText().replace(/^get/, removeQuote(item.getName())) + '\n'
+          }
+          if (Node.isPropertyAssignment(get)) {
+            getText = `get ` + get.getNodeProperty("initializer").getText().replace(/^function/, removeQuote(item.getName())) + '\n'
+          }
+          if (Node.isMethodDeclaration(set)) {
+            setText = `set ` + set.getText().replace(/^set/, removeQuote(item.getName())) + '\n'
+          }
+          if (Node.isPropertyAssignment(set)) {
+            setText = `set ` + set.getNodeProperty("initializer").getText().replace(/^function/, removeQuote(item.getName())) + '\n'
+          }
+
+
+          let objText = getText + setText
+          computedObjMembers.push({ docs, text: objText })
+          return
+        }
+
+        text = item.getNodeProperty("initializer").getText().replace(/^function/, removeQuote(item.getName()))
+      }
+
       computedMembers.push({ text, docs })
     } else {
       ignoredComputedMembers.push(item)
@@ -104,7 +148,7 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
     name: string
     type: string
     required: boolean
-    isArray: boolean
+
     defaultValue?: string
   }
 
@@ -116,9 +160,8 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
       let type: string = ''
       let text: string = ''
       let required = false
-      let isArray = false
       let defaultValue = ''
-      let name = item.getNodeProperty('name').getText()
+      let name = removeQuote(item.getName())
       if (Node.isObjectLiteralExpression(value)) {
         text = value.getText()
         let _type = value.getProperty('type')
@@ -127,19 +170,41 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
         }
         required = value.getProperty('required')?.getText() === 'true' || false
         let _default = value.getProperty('default')
+
+
+        if (_default) {
+          let fn = getCorrectFunction(_default)
+          if (fn && !type.includes('Function')) {
+            type = fn.getReturnType().getText()
+          } else {
+            type = _default.getType().getText()
+          }
+          defaultValue = 'hasDefaultValue'
+        }
+
         if (Node.isPropertyAssignment(_default)) {
           defaultValue = _default.getNodeProperty('initializer').getText() || ''
         }
 
 
+
       } else {
-        isArray = true
         type = item.getNodeProperty('initializer').getText()
         text = `{type:${type}}`
       }
 
       let docs = getDocs(item)
-      propsMembers.push({ docs, text, name, type, isArray, required, defaultValue })
+      type = type.replace(/String|Object|Number|Promise|Boolean|Symbol/g, (val) => {
+        return val.toLowerCase()
+      })
+      type = type.replace(/Array/g, 'unknown[]')
+
+      /* @ts-ignore */
+      type = type.replace(/\[([^]+)\]/, (val, $1: string) => {
+        return $1.replace(/,/g, ' | ')
+      })
+
+      propsMembers.push({ docs, text, name, type, required, defaultValue })
     }
 
   })
@@ -161,22 +226,22 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
       let target = item.getName()
       let match = target.match(/^['"`]([^]*)['"`]$/)
       if (match) target = match[1]
-      let name = `watch${target.substr(0, 1).toLocaleUpperCase() + target.substr(1)}Changes`
+      let name = `on${capitalize(target)}Change`
       let docs = getDocs(item)
       item.rename(name)
       let text = item.getText()
       let options: (string | undefined)[] = []
-
       watchMembers.push({ text, target, docs, options })
 
     } else if (Node.isPropertyAssignment(item)) {
+
       let obj = item.getInitializerIfKind(SyntaxKind.ObjectLiteralExpression)
       let handler = obj?.getProperty('handler')
       if (obj && Node.isMethodDeclaration(handler)) {
-        let target = handler.getName()
+        let target = removeQuote(handler.getName())
         let match = target.match(/^['"`]([^]*)['"`]$/)
         if (match) target = match[1]
-        let name = `watch${target.substr(0, 1).toLocaleUpperCase() + target.substr(1)}Changes`
+        let name = `on${capitalize(target).replace(/\./g, `_`)}Change`
         let docs = getDocs(item)
         handler.rename(name)
         let text = handler.getText()
@@ -186,10 +251,19 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
         let options = []
         immediate && options.push(immediate)
         deep && options.push(deep)
-
         watchMembers.push({ text, target, docs, options })
       } else {
-        ignoredWatchMembers.push(item)
+        let functionExpression = item.getInitializerIfKind(SyntaxKind.FunctionExpression)
+        if (functionExpression) {
+          let target = removeQuote(item.getName())
+          let name = `on${capitalize(target).replace(/\./g, `_`)}Change`
+          let text = functionExpression.getText().replace(/^function/, name)
+          let docs = getDocs(item)
+          let options: (string | undefined)[] = []
+          watchMembers.push({ text, target, docs, options })
+        } else {
+          ignoredWatchMembers.push(item)
+        }
       }
     } else {
       ignoredWatchMembers.push(item)
@@ -217,13 +291,16 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
     // let importPath = path.resolve(sf.getFilePath(), originalPath.match(/\.\//) ? '../' : '', originalPath)
     let match = originalPath.match(/\.(vue|ts|js)$/)
     if (!match && isVue) {
+      console.log(path.join(originalPath, '/index.vue'))
       if (fs.existsSync(originalPath + '.vue')) {
         item.replaceWithText(`'${item.getLiteralText()}.vue'`)
+      } else if (fs.existsSync(path.join(originalPath, '/index.vue'))) {
+        item.replaceWithText(`'${item.getLiteralText()}/index.vue'`)
       }
       // Suffixes for TS files do not seem to be needed
-      if (fs.existsSync(originalPath + '.js')) {
-        item.replaceWithText(`'${item.getLiteralText()}.ts'`)
-      }
+      // if (fs.existsSync(originalPath + '.js')) {
+      //   item.replaceWithText(`'${item.getLiteralText()}.ts'`)
+      // }
     }
   })
   // Don't deal with it for the moment
@@ -280,37 +357,44 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
   NeedToImports.push(mixinMembers.length ? 'Mixins' : 'Vue')
 
   let baseName = sf.getBaseName().split('.')[0]
-  baseName = baseName.substr(0, 1).toLocaleUpperCase() + baseName.substr(1)
+  let isFirstCharNumber = baseName.substr(0, 1).match(/\d/)
+  if (!isFirstCharNumber) {
+    baseName = capitalize(baseName)
+  }
+  /* @ts-ignore */
   baseName = baseName.replace(/[-_]([A-z])/g, (val, $1: string) => {
     return $1.toLocaleUpperCase()
   })
 
   sf.addImportDeclaration({ moduleSpecifier: 'vue-property-decorator', namedImports: NeedToImports })
+  sf.addStatements([...othersDataStatement])
   let defaultClass = sf.addClass({
-    name: baseName, isDefaultExport: true, extends: mixinMembers.length ? 'Mixins(' + mixinMembers.join(',') + ')' : 'Vue',
-    decorators: [{ name: 'Component', arguments: [others.length ? '{\n' + others.join(',\n') + '\n}' : ''] }]
+    name: isFirstCharNumber ? 'Page' + baseName : baseName, isDefaultExport: true, extends: mixinMembers.length ? 'Mixins(' + mixinMembers.join(',') + ')' : 'Vue',
+    decorators: [{ name: 'Component', arguments: others.length ? ['{\n' + others.join(',\n') + '\n}'] : undefined }]
   })
   let inConstructorDatas: DataMember[] = []
   defaultClass.addMember((writer) => {
-    propsMembers.map(item => {
-      writer.newLine()
+    propsMembers.map((item, index) => {
+      if (index !== 0) writer.newLine()
+      item.docs.before.length && writer.write(item.docs.before.join('\n') + '\n')
       // The type is not easy to deal with
       // :${item.type.toLocaleLowerCase()}
-      writer.write(`@Prop(${item.text})${item.text ? '\n' : ''} ${item.name}${item.isArray ? '' : ' = ' + item.defaultValue} ;`)
+      writer.write(`@Prop(${item.text})${item.text ? '\n' : ''} readonly ${item.name}${item.defaultValue || item.required ? '!' : ''} : ${item.type} ${item.docs.after.join(' ')} ;`)
     })
     propsArrayMembers?.map(item => {
       writer.newLine()
-      writer.write(`@Prop() ${item.match(/^['"`]([^]*)['"`]$/)?.[1]} ;`)
+      writer.write(`@Prop() ${item.match(/^['"`]([^]*)['"`]$/)?.[1]}  ;`)
     })
     writer.blankLineIfLastNot()
-    dataMembers.map(item => {
-      writer.newLine()
+    // 需要解决类型过长的问题 暂时取消  :${item.type}
+    dataMembers.map((item, index) => {
+      if (index !== 0) writer.newLine()
       item.docs.before.length && writer.write(item.docs.before.join('\n') + '\n')
       if (!item.inConstructor) {
-        writer.write(`${item.name}:${item.type} = ${item.initializer}; ${item.docs.after.join(' ')}`)
+        writer.write(`public ${item.name} = ${item.initializer}; ${item.docs.after.join(' ')}`)
       } else {
         inConstructorDatas.push(item)
-        writer.write(`${item.name}:${item.type}; ${item.docs.after.join(' ')}`)
+        // writer.write(`${item.name}; ${item.docs.after.join(' ')}`)
       }
     })
     writer.blankLineIfLastNot()
@@ -328,35 +412,41 @@ export function transformScript(sf: SourceFile, rootPath: string, isVue?: boolea
   defaultClass.addMember((writer) => {
     computedMembers.map(item => {
       writer.blankLineIfLastNot()
-      writer.write(item.docs.before.join('\n'))
+      if (item.docs.before.length) writer.write(item.docs.before.join('\n'))
       writer.newLine()
-      writer.write('get ' + item.text + ';')
+      writer.write('get ' + item.text)
+    })
+    computedObjMembers.map(item => {
+      writer.blankLineIfLastNot()
+      if (item.docs.before.length) writer.write(item.docs.before.join('\n'))
+      writer.newLine()
+      writer.write(item.text)
     })
 
 
     lifeCycleMembers.map(item => {
       writer.blankLineIfLastNot()
-      writer.write(item.docs.before.join('\n'))
+      if (item.docs.before.length) writer.write(item.docs.before.join('\n'))
       writer.newLine()
-      writer.write(item.text + ';')
+      writer.write(`protected ` + item.text)
     })
 
     methodsMembers.map((item) => {
 
       writer.blankLineIfLastNot()
-      writer.write(item.docs.before.join('\n'))
+      if (item.docs.before.length) writer.write(item.docs.before.join('\n'))
       writer.newLine()
-      writer.write(item.text + ';')
+      writer.write(`public ` + item.text)
     })
 
     watchMembers.map(item => {
       let options = item.options.length ? `, { ${item.options.join(', ')} }` : ''
       writer.blankLineIfLastNot()
-      writer.write(item.docs.before.join('\n'))
+      if (item.docs.before.length) writer.write(item.docs.before.join('\n'))
       writer.newLine()
       writer.write(`@Watch('${item.target}'${options})`)
       writer.newLine()
-      writer.write(item.text + ';')
+      writer.write(item.text)
     })
   })
 

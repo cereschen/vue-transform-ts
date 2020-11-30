@@ -20,4 +20,5 @@ Transform vue files to class ts vue files.
 
  Js files whose names contain mixins are also processed.
 
- You can also use  `import { start } from 'vue-transform-ts'`
+ You can also use  `import { transform } from 'vue-transform-ts'`
+

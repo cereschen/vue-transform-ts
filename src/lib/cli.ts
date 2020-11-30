@@ -2,7 +2,7 @@
 
 import * as yargs from 'yargs';
 import path from 'path'
-import { start } from '..';
+import { transform } from '..';
 const yarg = yargs.usage('Transform vue files to class ts vue files.\nUsage: vue2ts [options] <root directory> <out directory>')
   .example('vue2ts src', 'The default output directory  is root directory name +"Ts"')
   .example('vue2ts src  dist', 'Output directory  is dist')
@@ -38,7 +38,7 @@ async function main(): Promise<void> {
         outPath = String(argv._[1])
       }
     }
-    start(rootPath, outPath)
+    transform(rootPath, outPath)
   } else {
     yarg.showHelp();
     return;

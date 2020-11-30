@@ -1,7 +1,7 @@
 {
   "name": "vue-transform-ts",
-  "version": "0.0.1",
-  "description": "Transform vue files to class ts vue files",
+  "version": "1.0.0",
+  "description": "Transform vue options component to class component",
   "keywords": ["vue","class","ts","decorator","transform"],
   "main": "dist/index.js",
   "files": ["dist"],
@@ -10,8 +10,7 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "watch": "tsc -w",
-    "run": "node dist --inspect"
+    "watch": "tsc -w"
   },
   "repository": {
     "type": "git",
